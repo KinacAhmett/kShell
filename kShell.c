@@ -3,6 +3,7 @@
 #include <string.h>     // strcmp, strcspn, strtok
 #include <unistd.h>     // fork, execvp
 #include <sys/wait.h>   // wait, waitpid
+#include <fcntl.h>    // open, O_WRONLY, O_CREAT, O_TRUNC
 
 #define MAX_CHAR 1024   // bir satırda en fazla karakter
 #define MAX_ARG  64     // bir komutta en fazla kelime
@@ -108,8 +109,46 @@ int kshell_num_builtins(void) {
 
 // --- Komutu çalıştır. Devam edilecekse 1, çıkılacaksa 0 döner ---
 int kshell_launch(char **argv) {
+    char *outfile = NULL;
+    char *infile = NULL;
+
+    for (int i = 0; argv[i] != NULL; i++) {
+        if (strcmp(argv[i], ">") == 0) {
+            outfile = argv[i+1];
+            argv[i] = NULL;
+            break;
+        }
+        if (strcmp(argv[i], "<") == 0) {
+            infile = argv[i+1];
+            argv[i] = NULL;
+            break;
+        }
+    }
     pid_t pid = fork();
     if (pid == 0) {
+        // CHILD PROCESS
+
+        if (outfile != NULL){
+            int fd = open(outfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd == -1) { // on error return -1
+                perror("kshell");
+                exit(EXIT_FAILURE);
+            }
+            dup2(fd,1);
+            close(fd);
+        }
+        if (infile != NULL)
+        {
+            int fd = open(infile, O_RDONLY, 0644);
+            if (fd == -1)
+            {
+                perror("kshell");
+                exit(EXIT_FAILURE);
+            }
+            dup2(fd,0);
+            close(fd);
+        }
+        
         execvp(argv[0], argv);
         perror("kshell");
         exit(EXIT_FAILURE);
@@ -118,6 +157,44 @@ int kshell_launch(char **argv) {
     } else {
         perror("kshell");
     }
+    return 1;
+}
+
+int kshell_launch_pipe (char **left_argv, char **right_argv) {
+    
+    // left_argv  = ["ls", NULL];
+    // right_argv  = ["grep", "k", NULL];
+
+    int fds[2];
+    if (pipe(fds) == -1)
+    {
+        perror("kshell");
+        return 1;
+    }
+    pid_t pid1 = fork();
+    if (pid1 == 0) {
+        // CHILD PROCESS
+        dup2(fds[1],1);
+        close(fds[1]);
+        close(fds[0]);
+        execvp(left_argv[0], left_argv);   // ls'e dönüş
+        perror("kshell");
+        exit(EXIT_FAILURE);
+    }
+    pid_t pid2 = fork();
+    if (pid2 == 0) {
+        // CHILD PROCESS
+        dup2(fds[0],0);
+        close(fds[1]);
+        close(fds[0]);
+        execvp(right_argv[0], right_argv);   // ls'e dönüş
+        perror("kshell");
+        exit(EXIT_FAILURE);
+    }
+    close(fds[0]);    
+    close(fds[1]);    
+    wait(NULL);       
+    wait(NULL);       
     return 1;
 }
 
@@ -131,7 +208,15 @@ int kshell_execute(char **argv) {
         }
     }
 
-    return kshell_launch(argv);   // built-in değil → launch'a devret
+    for (int i = 0; argv[i] != NULL; i++) {
+        if (strcmp(argv[i], "|") == 0) {
+            argv[i] = NULL;
+            char **right_argv = &argv[i+1];
+            return kshell_launch_pipe(argv, right_argv);
+        }
+    }
+
+    return kshell_launch(argv);   
 }
 
 // --- Ana döngü: shell yaşadıkça komut al ---
