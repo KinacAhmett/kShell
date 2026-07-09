@@ -4,9 +4,15 @@
 #include <unistd.h>     // fork, execvp
 #include <sys/wait.h>   // wait, waitpid
 #include <fcntl.h>    // open, O_WRONLY, O_CREAT, O_TRUNC
+#include <signal.h>   // signal, SIGINT, SIG_IGN, SIG_DFL
 
 #define MAX_CHAR 1024   // bir satırda en fazla karakter
 #define MAX_ARG  64     // bir komutta en fazla kelime
+
+void sigchld_handler(int sig) {
+    while (waitpid(-1, NULL, WNOHANG) > 0);
+        
+}
 
 char *kshell_read_line(void) {
     char *buffer = malloc(MAX_CHAR);
@@ -111,8 +117,15 @@ int kshell_num_builtins(void) {
 int kshell_launch(char **argv) {
     char *outfile = NULL;
     char *infile = NULL;
+    int background = 0;
 
     for (int i = 0; argv[i] != NULL; i++) {
+
+        if (strcmp(argv[i], "&") == 0) {
+            background = 1;      
+            argv[i] = NULL;      
+            break;
+        }
         if (strcmp(argv[i], ">") == 0) {
             outfile = argv[i+1];
             argv[i] = NULL;
@@ -124,9 +137,11 @@ int kshell_launch(char **argv) {
             break;
         }
     }
+
     pid_t pid = fork();
     if (pid == 0) {
         // CHILD PROCESS
+        signal(SIGINT, SIG_DFL);   // ← child normale dönsün
 
         if (outfile != NULL){
             int fd = open(outfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -152,13 +167,20 @@ int kshell_launch(char **argv) {
         execvp(argv[0], argv);
         perror("kshell");
         exit(EXIT_FAILURE);
-    } else if (pid > 0) {
-        wait(NULL);
-    } else {
-        perror("kshell");
     }
+    else if (pid > 0) {          
+        if (background) {          
+        // boş
+        }
+        else {                   
+        wait(NULL);
+        }                          
+    }
+    else {                       
+        perror("kshell");
+    }                              
     return 1;
-}
+    }
 
 int kshell_launch_pipe (char **left_argv, char **right_argv) {
     
@@ -173,7 +195,9 @@ int kshell_launch_pipe (char **left_argv, char **right_argv) {
     }
     pid_t pid1 = fork();
     if (pid1 == 0) {
-        // CHILD PROCESS
+        // CHILD PROCESs
+        signal(SIGINT, SIG_DFL);
+
         dup2(fds[1],1);
         close(fds[1]);
         close(fds[0]);
@@ -184,6 +208,8 @@ int kshell_launch_pipe (char **left_argv, char **right_argv) {
     pid_t pid2 = fork();
     if (pid2 == 0) {
         // CHILD PROCESS
+        signal(SIGINT, SIG_DFL);
+
         dup2(fds[0],0);
         close(fds[1]);
         close(fds[0]);
@@ -223,19 +249,22 @@ int kshell_execute(char **argv) {
 void kshell_loop(void) {
     char *argv[MAX_ARG];
 
+    signal(SIGINT, SIG_IGN);
+    signal(SIGCHLD, sigchld_handler);
+
     while (1) {
     printf("kshell> ");
     fflush(stdout);
 
-    char *satir = kshell_read_line();   // kutuyu al
-    if (satir == NULL) break;           // Ctrl+D → çık
+    char *satir = kshell_read_line();   
+    if (satir == NULL) break;          
 
     kshell_split_line(satir, argv);
     if (!kshell_execute(argv)) {
-        free(satir);                     // çıkmadan önce temizle
+        free(satir);                     
         break;
     }
-    free(satir);                         // komut bitti, kutuyu iade et
+    free(satir);                         
 }
 }
 
